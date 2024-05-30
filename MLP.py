@@ -1,195 +1,170 @@
 import numpy as np
-import math
-import operator
 import re
 import pandas as pd
-from random import random
 
-class MLP(object):
-    def __init__(self, num_inputs=10, hidden_layers=[3, 3], num_outputs=1):
-        self.num_inputs = num_inputs
-        self.hidden_layers = hidden_layers
-        self.num_outputs = num_outputs
+class AdvancedMLP:
+    def __init__(self, input_size, hidden_sizes, output_size, learning_rate=0.001, l2_lambda=0.01, dropout_rate=0.2, clip_value=1.0):
+        self.input_size = input_size
+        self.hidden_sizes = hidden_sizes
+        self.output_size = output_size
+        self.learning_rate = learning_rate
+        self.l2_lambda = l2_lambda
+        self.dropout_rate = dropout_rate
+        self.clip_value = clip_value
 
-        # create different layers
-        layers = [num_inputs] + hidden_layers + [num_outputs]
+        # Initialize weights and biases
+        self.weights = []
+        self.biases = []
 
-        # randomize weights for the layers
-        weights = []
-        print("Initial Weights:")
-        for i in range(len(layers) - 1):
-            w = np.random.rand(layers[i], layers[i + 1])
-            weights.append(w)
-        self.weights = weights
-        for j in range(100):
-            x = np.random.ranf()
-            print("Edge [{}]: {}".format(j,x))
-        print("==="*20)
+        layer_sizes = [input_size] + hidden_sizes + [output_size]
+        for i in range(len(layer_sizes) - 1):
+            weight = np.random.randn(layer_sizes[i], layer_sizes[i + 1]) * np.sqrt(2. / layer_sizes[i])
+            bias = np.zeros((1, layer_sizes[i + 1]))
+            self.weights.append(weight)
+            self.biases.append(bias)
 
-        #derivatives per layer
-        derivatives = []
-        for i in range(len(layers) - 1):
-            d = np.zeros((layers[i], layers[i + 1]))
-            derivatives.append(d)
-        self.derivatives = derivatives
+    def leaky_relu(self, x, alpha=0.01):
+        return np.where(x > 0, x, x * alpha)
 
-        #activation function
-        activations = []
-        for i in range(len(layers)):
-            a = np.zeros(layers[i])
-            activations.append(a)
-        self.activations = activations
+    def leaky_relu_derivative(self, x, alpha=0.01):
+        return np.where(x > 0, 1, alpha)
 
+    def dropout(self, x, rate):
+        mask = np.random.binomial(1, 1 - rate, size=x.shape)
+        return x * mask / (1 - rate)
 
-    def forward_propagate(self, inputs):
-        activations = inputs
+    def forward(self, X):
+        self.z = []
+        self.a = [X]
 
-        #activations for backpropagation
-        self.activations[0] = activations
-
-        # iterate through the network layers
-        for i, w in enumerate(self.weights):
-            # calculate matrix multiplication between previous activation and weight matrix
-            net_inputs = np.dot(activations, w)
-
-            #sigmoid activation function
-            activations = self._sigmoid(net_inputs)
-
-            #activations for backpropagation
-            self.activations[i + 1] = activations
-
-        # return output layer activation
-        return activations
-
-
-    def back_propagate(self, error):
-        # iterate backwards through the network layers
-        for i in reversed(range(len(self.derivatives))):
-
-            # get activation for previous layers
-            activations = self.activations[i+1]
-
-            # sigmoid derivative function
-            delta = error * self._sigmoid_derivative(activations)
-
-            # reshape delta to get a 2d array
-            delta_re = delta.reshape(delta.shape[0], -1).T
-
-            #activations for current layer
-            current_activations = self.activations[i]
-
-            # reshape activations
-            current_activations = current_activations.reshape(current_activations.shape[0],-1)
-
-            self.derivatives[i] = np.dot(current_activations, delta_re)
-
-            # backpropagate error
-            error = np.dot(delta, self.weights[i].T)
-
-
-    def train(self, inputs, targets, epochs, learning_rate):
-        for i in range(epochs):
-            sum_errors = 0
-
-            # iterate through the training data
-            for j, input in enumerate(inputs):
-                target = targets[j]
-
-                # activate the network
-                output = self.forward_propagate(input)
-
-                error = target - output
-
-                self.back_propagate(error)
-
-                # now perform gradient descent on the derivatives
-                self.gradient_descent(learning_rate)
-
-                # keep track of the MSE
-                sum_errors += self._mse(target, output)
-
-            # Epochs and error rate
-            print("Error: {} at epoch {}".format(sum_errors / len(items), i+1))
-
-        print("Training complete!")
-        print("=====")
-
-
-    def gradient_descent(self, learningRate=1):
-        # update the weights by stepping down the gradient
         for i in range(len(self.weights)):
-            weights = self.weights[i]
-            derivatives = self.derivatives[i]
-            weights += derivatives * learningRate
-        
+            z = np.dot(self.a[-1], self.weights[i]) + self.biases[i]
+            self.z.append(z)
+            if i == len(self.weights) - 1:
+                a = z  # No activation in the output layer
+            else:
+                a = self.leaky_relu(z)
+                if i < len(self.weights) - 1:
+                    a = self.dropout(a, self.dropout_rate)
+            self.a.append(a)
 
+        return self.a[-1]
 
-    def _sigmoid(self, x):
-        y = 1.0 / (1 + np.exp(-x))
-        return y
+    def backward(self, X, y):
+        m = y.shape[0]
+        dz = self.a[-1] - y
+        dw = np.dot(self.a[-2].T, dz) / m + (self.l2_lambda / m) * self.weights[-1]
+        db = np.sum(dz, axis=0, keepdims=True) / m
 
+        # Gradient clipping
+        dw = np.clip(dw, -self.clip_value, self.clip_value)
+        db = np.clip(db, -self.clip_value, self.clip_value)
 
-    def _sigmoid_derivative(self, x):
-        return x * (1.0 - x)
+        self.weights[-1] -= self.learning_rate * dw
+        self.biases[-1] -= self.learning_rate * db
 
+        for i in range(len(self.weights) - 2, -1, -1):
+            dz = np.dot(dz, self.weights[i + 1].T) * self.leaky_relu_derivative(self.z[i])
+            dw = np.dot(self.a[i].T, dz) / m + (self.l2_lambda / m) * self.weights[i]
+            db = np.sum(dz, axis=0, keepdims=True) / m
 
-    def _mse(self, target, output):
-        return np.average((target - output) ** 2)
+            # Gradient clipping
+            dw = np.clip(dw, -self.clip_value, self.clip_value)
+            db = np.clip(db, -self.clip_value, self.clip_value)
 
+            self.weights[i] -= self.learning_rate * dw
+            self.biases[i] -= self.learning_rate * db
 
-def read_file(filepath) -> list:
-    ds = []        
+    def train(self, X, y, epochs, batch_size, validation_data=None, patience=10, lr_scheduler=False):
+        best_val_loss = float('inf')
+        no_improvement_count = 0
+
+        for epoch in range(epochs):
+            indices = np.arange(X.shape[0])
+            np.random.shuffle(indices)
+            X = X[indices]
+            y = y[indices]
+
+            for start in range(0, X.shape[0], batch_size):
+                end = start + batch_size
+                X_batch, y_batch = X[start:end], y[start:end]
+
+                self.forward(X_batch)
+                self.backward(X_batch, y_batch)
+
+            if (epoch + 1) % 100 == 0 or epoch == epochs - 1:
+                output = self.forward(X)
+                loss = np.mean((y - output) ** 2)
+                print(f'Epoch {epoch+1}, Loss: {loss}')
+
+            if validation_data:
+                val_X, val_y = validation_data
+                val_predictions = self.forward(val_X)
+                val_loss = np.mean((val_y - val_predictions) ** 2)
+                print(f'Epoch {epoch+1}, Validation Loss: {val_loss}')
+
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    no_improvement_count = 0
+                else:
+                    no_improvement_count += 1
+
+                if no_improvement_count >= patience:
+                    print(f'Early stopping at epoch {epoch+1}')
+                    break
+
+            if lr_scheduler:
+                self.learning_rate *= 0.95  # Reduce learning rate by 5% each epoch
+
+def read_file(filepath):
+    ds = []
     with open(filepath) as fp:
-        for line in fp:                              
+        for line in fp:
             comp = re.compile("\d+")
-            dataList = comp.findall(line)                   
-            row = list(map(int, dataList[1:]))       
+            dataList = comp.findall(line)
+            row = list(map(int, dataList[1:]))
             ds.append(row)
     return ds
 
-def create_df(dataset : list):
-    dataframe = pd.DataFrame(dataset, columns=['a','b','c','d','e','f','g','h','i','j','label'])    
+def create_df(dataset):
+    dataframe = pd.DataFrame(dataset, columns=['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'label'])
     return dataframe
 
-
 if __name__ == "__main__":
-    print("~"*50)
-    print("\nMLP Architecture: ANN\nEpochs: 100\n")
-    #reading dataset file
     dataset = read_file("dataset.txt")
     df = create_df(dataset)
-    
 
-    #spliting training and holdout set
+    # Splitting training and holdout set
     msk = np.random.rand(len(df)) < 0.8
     train = df[msk]
     holdout = df[~msk]
-    items = train.drop(labels="label",axis=1)
-    targets = train.drop(~items,axis=1)
+    items = train.drop(columns="label")
+    targets = train["label"].values.reshape(-1, 1)
     inp = np.array(items)
     tar = np.array(targets)
 
-    #Spliting holdout set
-    hold_items = train.drop(labels="label",axis=1)
-    hold_targets = train.drop(~items,axis=1)
-    hold_items = np.array(hold_items)
+    # Normalizing the inputs
+    inp = (inp - np.mean(inp, axis=0)) / np.std(inp, axis=0)
 
-#     # create a Multilayer Perceptron with one hidden layer
-    mlp = MLP(10, [10,10], 1)
+    # Create an advanced MLP
+    mlp = AdvancedMLP(input_size=10, hidden_sizes=[32, 16], output_size=1, learning_rate=0.001, l2_lambda=0.001, dropout_rate=0.2, clip_value=1.0)
 
-#     # train network
-    mlp.train(inp, tar, 100, 0.01)
+    # Train the network
+    mlp.train(inp, tar, epochs=1000, batch_size=32, validation_data=(vinp, vtar), patience=10, lr_scheduler=True)
 
-
-#validation set
+    # Validation set
     val = read_file("validationSet.txt")
     vf = create_df(val)
-    vitems = df.drop(labels="label",axis=1)
-    vtargets = df.drop(~vitems,axis=1)
+    vitems = vf.drop(columns="label")
+    vtargets = vf["label"].values.reshape(-1, 1)
     vinp = np.array(vitems)
     vtar = np.array(vtargets)
 
+    # Normalizing the validation inputs
+    vinp = (vinp - np.mean(vinp, axis=0)) / np.std(vinp, axis=0)
 
-
-
+    # Evaluate on validation set
+    predictions = mlp.forward(vinp)
+    val_error = np.mean((vtar - predictions) ** 2)
+    print(f"Validation MSE: {val_error}")
 
